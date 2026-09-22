@@ -1,0 +1,56 @@
+{
+  "asr": {
+    "realtime": {
+      "enabled": true,
+      "provider": "dashscope",
+      "sample_rate": 16000,
+      "model": "paraformer-realtime-v2",
+      "api_key_env": "DASHSCOPE_API_KEY",
+      "ws_url": "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
+      "language_hints": ["zh"],
+      "audio_chunk_ms": 100,
+      "semantic_punctuation_enabled": false,
+      "punctuation_prediction_enabled": true,
+      "max_sentence_silence_ms": 1300,
+      "heartbeat": false,
+      "languages": ["zh-cn"],
+      "keywords": ["AI", "Agent", "大模型", "投资"],
+      "prompt": "中文直播口播，可能包含人工智能、Agent、投资和科技产业术语。",
+      "delay": "low",
+      "timeout_sec": 20
+    },
+    "offline": {
+      "provider": "funasr_local",
+      "chunk_seconds": 300,
+      "sample_rate": 16000,
+      "response_format": "json",
+      "prompt": "中文直播口播，可能包含人工智能、Agent、投资和科技产业术语。",
+      "timeout_sec": 180,
+      "local": {
+        "base_url": "http://127.0.0.1:18000/v1",
+        "health_url": "http://127.0.0.1:18000/health",
+        "model": "sensevoice",
+        "language": "zh",
+        "manage_process": true,
+        "start_mode": "lazy",
+        "server_command": ["funasr-server", "--host", "127.0.0.1", "--port", "18000", "--model", "sensevoice", "--device", "cpu"],
+        "startup_timeout_sec": 90,
+        "shutdown_timeout_sec": 10
+      }
+    }
+  },
+  "llm": {
+    "provider": "deepseek",
+    "model": "deepseek-v4-flash",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "base_url": "https://api.deepseek.com",
+    "timeout_sec": 45,
+    "thinking": "disabled",
+    "temperature": null,
+    "max_tokens": 300
+  },
+  "notification": {
+    "enabled": false,
+    "provider": "none"
+  }
+}

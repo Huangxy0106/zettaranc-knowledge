@@ -1,0 +1,174 @@
+audio:
+  archive_sample_rate: 48000
+  archive_channels: 2
+  archive_sample_width: 2
+  archive_codec: flac
+  segment_minutes: 120
+  merge_after_session: true
+  keep_segments_after_finalize_days: 1
+  working_dir: sessions
+
+bilibili_capture:
+  # 指定房间从开场起始终使用已登录浏览器 + BlackHole，
+  # 避免公开流切换为充电/DRM 流时中断录音。
+  browser_audio_room_ids: []
+  status_poll_interval_sec: 30
+  offline_confirmations: 3
+  offline_confirmation_interval_sec: 5
+  continuous_silence_timeout_sec: 180
+  silence_rms_threshold: 100
+
+asr:
+  realtime:
+    # false 会暂停实时转写、高价值判断和即时通知；录音与离线转写继续。
+    enabled: true
+    provider: dashscope
+    sample_rate: 16000
+    model: paraformer-realtime-v2
+    api_key_env: DASHSCOPE_API_KEY
+    ws_url: wss://dashscope.aliyuncs.com/api-ws/v1/inference
+    # workspace_id 可选；填写后使用业务空间专属域名/请求头
+    workspace_id: null
+    language_hints: [zh]
+    audio_chunk_ms: 100
+    semantic_punctuation_enabled: false
+    punctuation_prediction_enabled: true
+    max_sentence_silence_ms: 1300
+    heartbeat: false
+    languages: [zh-cn]
+    keywords: [AI, Agent, 大模型, 投资]
+    prompt: 中文直播口播，可能包含人工智能、Agent、投资和科技产业术语。
+    delay: low
+    timeout_sec: 20
+  offline:
+    provider: openai
+    model: gpt-transcribe
+    api_key_env: OPENAI_API_KEY
+    base_url: https://api.openai.com/v1
+    chunk_seconds: 300
+    sample_rate: 16000
+    response_format: json
+    prompt: 中文直播口播，可能包含人工智能、Agent、投资和科技产业术语。
+    timeout_sec: 120
+    local:
+      base_url: http://127.0.0.1:18000/v1
+      health_url: http://127.0.0.1:18000/health
+      model: sensevoice
+      language: zh
+      manage_process: true
+      # lazy: 离线加工时启动；session: 整体任务开始时启动；external: 只复用外部服务
+      start_mode: lazy
+      server_command: [funasr-server, --host, 127.0.0.1, --port, "18000", --model, sensevoice, --device, cpu]
+      startup_timeout_sec: 90
+      shutdown_timeout_sec: 10
+
+analysis:
+  interval_sec: 60
+  fast_window_sec: 30
+  topic_window_sec: 180
+  llm_window_sec: 300
+  context_window_sec: 900
+
+llm:
+  provider: deepseek
+  model: deepseek-v4-flash
+  api_key_env: DEEPSEEK_API_KEY
+  base_url: https://api.deepseek.com
+  timeout_sec: 30
+  thinking: disabled
+  temperature: null
+  max_tokens: 500
+
+interest:
+  whitelist: [AI, Agent, 大模型, 投资, 行业分析]
+  blacklist: [星座, 起名, 情感聊天, 日常闲聊]
+  candidate_threshold: 0.65
+  hot_threshold: 0.78
+  leave_hot_threshold: 0.45
+  enter_hot_consecutive_windows: 2
+  leave_hot_consecutive_windows: 3
+  notification_cooldown_sec: 600
+  # 可直接修改规则，不需要改 Python：
+  structure_markers: [第一, 第二, 第三, 核心, 原因, 方法, 步骤, 举个例子, 结论, 总结, 分成, 区别, 关键]
+  density_markers: [第一, 第二, 第三, 核心, 原因, 方法, 步骤, 举个例子, 结论, 总结, 分成, 区别, 关键, 因为, 所以, 数据, 对比, 框架, 案例, 判断, 策略, 预测]
+  semantic_blend: 0.5
+  blacklist_multiplier: 0.25
+  tuning:
+    density_marker_weight: 0.12
+    density_number_weight: 0.05
+    long_text_bonus: 0.12
+    long_text_chars: 100
+    structure_marker_weight: 0.25
+    novelty_base: 0.35
+    novelty_unique_divisor: 200
+
+notification:
+  enabled: true
+  cooldown_minutes: 10
+  provider: feishu_webhook
+  webhook_url_env: FEISHU_WEBHOOK_URL
+  secret_env: FEISHU_WEBHOOK_SECRET
+  ntfy_url_env: NTFY_URL
+  ntfy_token_env: NTFY_TOKEN
+  ntfy_title: Live Sentinel
+  ntfy_priority: high
+  ntfy_tags: [fire]
+  ntfy_click_url: null
+  summary_enabled: true
+  summary_webhook_url_env: FEISHU_SUMMARY_WEBHOOK_URL
+  summary_secret_env: FEISHU_SUMMARY_WEBHOOK_SECRET
+  timeout_sec: 10
+
+feishu_docs:
+  enabled: true
+  base_url: https://open.feishu.cn
+  app_id_env: FEISHU_APP_ID
+  app_secret_env: FEISHU_APP_SECRET
+  folder_token_env: FEISHU_DOCS_FOLDER_TOKEN
+  human_member_id_env: FEISHU_DOCS_HUMAN_MEMBER_ID
+  doc_url_template_env: FEISHU_DOC_URL_TEMPLATE
+  # 例如 https://your-tenant.feishu.cn/docx/{document_id}
+  doc_url_template: null
+  require_folder_token: true
+  human_access_required: true
+  human_member_type: openid
+  human_permission: full_access
+  transfer_owner: true
+  keep_app_after_transfer: true
+  max_blocks_per_request: 50
+  max_blocks_per_document: 5000
+  timeout_sec: 20
+
+backup:
+  enabled: true
+  provider: baidu_bypy
+  command: bypy
+  remote_root: /live-sentinel
+  timeout_sec: 3600
+  required: false
+
+storage:
+  # 正式部署建议改为 /Volumes/T5/zettaranc-live/sessions
+  root_dir: sessions
+  require_mounted_path: false
+  minimum_free_gib: 20
+
+watchlist:
+  state_db: "~/Library/Application Support/LiveSentinel/watchlist.sqlite3"
+  offline_poll_interval_sec: 60
+  live_poll_interval_sec: 15
+  error_backoff_base_sec: 30
+  error_backoff_max_sec: 900
+  capture_silence_failure_limit: 3
+  capture_silence_circuit_break_sec: 3600
+  max_concurrent_sessions: 1
+  max_session_minutes: 720
+  discovery_timeout_sec: 20
+
+postprocess:
+  verbatim_transcript: true
+  readable_transcript: true
+  subtitles: true
+  chaptering: true
+  highlights: true
+  session_summary: true

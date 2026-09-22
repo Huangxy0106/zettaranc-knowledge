@@ -163,6 +163,35 @@ zettaranc-knowledge/
 
 维护规范详见 [CLAUDE.md](CLAUDE.md)
 
+### B站直播监听 V1
+
+仓库根目录还包含一套独立的 `live_sentinel` 核心实现，对应
+[B站直播智能监听与内容归档系统概要设计](B站直播智能监听与内容归档系统——概要设计.md)。
+当前已实现音频分流、分片归档与校验、滚动转写缓存、规则评分、干货状态机、SQLite
+和离线产物写出；具体 B 站输入、ASR、LLM 和通知服务均保留为可替换适配器。
+
+当前本机生产配置用 Apple `SpeechTranscriber` 做实时语义转写、按需启动本地
+FunASR `SenseVoice` 生成会后逐字稿，另配 DeepSeek `deepseek-v4-flash` 判断、
+ntfy 即时通知和飞书文档交付。通用配置仍保留阿里云百炼 Paraformer 等可选适配器。
+凭据只从环境变量读取，详见
+[`live_sentinel/README.md`](live_sentinel/README.md) 的“真实服务接入”。
+
+离线 ASR 也支持本机 FunASR：可以配置为 `lazy`（离线加工时启动）或 `session`
+（随整体任务启动、任务结束时关闭），不需要平时单独常驻维护。
+
+```bash
+python3 -m live_sentinel demo --output-dir /tmp/live-sentinel-demo --duration-sec 8
+```
+
+实现边界与接入方式见 [`live_sentinel/README.md`](live_sentinel/README.md)。
+
+直播监听的独立审计包见 [`live_sentinel/AUDIT_REVIEW_PACKET.md`](live_sentinel/AUDIT_REVIEW_PACKET.md)，
+持久化 Watchlist 自动调度与 `sentinel` CLI 已实现；面向后续本地控制台的使用方式建议见
+[`live_sentinel/USAGE_DESIGN_RECOMMENDATION.md`](live_sentinel/USAGE_DESIGN_RECOMMENDATION.md)。
+当前本机策略为 19:00 前每 3 小时、每天 19:00–24:00 每 1 小时，周三和周日
+19:00–24:00（Asia/Shanghai）覆盖为每 5 分钟；真实 Session 先写内置盘 staging，
+完成并通过逐文件 SHA-256 校验后再原子发布到 T5。
+
 ---
 
 ## 📖 版本历史

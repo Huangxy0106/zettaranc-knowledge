@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "live-sentinel"
+version = "0.1.0"
+description = "B站直播实时监听与内容归档 V1 核心链路"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+yaml = ["PyYAML>=6"]
+providers = ["websocket-client>=1.8"]
+backup = ["bypy>=1.8"]
+credentials = ["browser-cookie3>=0.20.1"]
+
+[project.scripts]
+sentinel = "live_sentinel.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["live_sentinel*"]

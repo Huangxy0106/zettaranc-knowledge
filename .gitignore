@@ -10,3 +10,22 @@ raw/
 # OS
 .DS_Store
 Thumbs.db
+
+# Python runtime
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+*.egg-info/
+
+# Local credentials and daemon state
+.live-sentinel.env
+config.user.json
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Local live_sentinel outputs
+demo-output/
+sessions/
+.build/
+/reports/asr-shadow/
