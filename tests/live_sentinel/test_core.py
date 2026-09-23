@@ -20,9 +20,30 @@ from live_sentinel.analysis.analyzer import RuleBasedContentAnalyzer
 from live_sentinel.models import AnalysisFeatures, AudioFrame, InterestState, TranscriptSegment
 from live_sentinel.transcript.buffer import TranscriptBuffer
 from live_sentinel.session.checkpoint import Checkpoint, CheckpointStore
+from live_sentinel.session.manager import SessionManager
 
 
 class CoreTests(unittest.TestCase):
+    def test_whitelist_match_reaches_semantic_judge_below_candidate_threshold(self) -> None:
+        features = AnalysisFeatures(
+            topic="定价权",
+            whitelist_score=1 / 3,
+            metadata={"whitelist_matches": ("定价权",)},
+        )
+        self.assertTrue(
+            SessionManager._should_evaluate_semantics(features, 0.20, 0.30)
+        )
+        self.assertTrue(
+            SessionManager._should_evaluate_semantics(
+                AnalysisFeatures(topic="隐含投资观点"), 0.30, 0.30
+            )
+        )
+        self.assertFalse(
+            SessionManager._should_evaluate_semantics(
+                AnalysisFeatures(topic="闲聊"), 0.29, 0.30
+            )
+        )
+
     def test_interest_formula_markers_and_tuning_are_configurable(self) -> None:
         analyzer = RuleBasedContentAnalyzer(
             ["目标"],

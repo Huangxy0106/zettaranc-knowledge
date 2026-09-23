@@ -161,13 +161,35 @@ class LLMConfig:
 @dataclass
 class InterestConfig:
     whitelist: list[str] = field(
-        default_factory=lambda: ["AI", "Agent", "大模型", "投资", "行业分析"]
+        default_factory=lambda: [
+            "AI",
+            "Agent",
+            "大模型",
+            "投资",
+            "产业",
+            "行业",
+            "新能源",
+            "制造业",
+            "科技",
+            "芯片",
+            "定价权",
+            "市场选择",
+            "流动性",
+            "估值",
+            "仓位",
+            "策略",
+        ]
     )
     blacklist: list[str] = field(
         default_factory=lambda: ["星座", "起名", "情感聊天", "日常闲聊"]
     )
-    candidate_threshold: float = 0.65
-    hot_threshold: float = 0.78
+    # 低成本规则分只负责决定是否值得调用 LLM；最终候选/重点阈值独立设置。
+    # 这样隐含的投资观点不会因为没说出精确关键词而直接写成 semantic=null。
+    semantic_trigger_threshold: float = 0.30
+    # 即时提醒用于提示用户是否值得上线试听，不要求内容已经形成可执行结论。
+    # LLM 语义分主导最终判定；规则分仍负责提供可解释的先验信号。
+    candidate_threshold: float = 0.50
+    hot_threshold: float = 0.65
     leave_hot_threshold: float = 0.45
     enter_hot_consecutive_windows: int = 2
     leave_hot_consecutive_windows: int = 3
@@ -217,7 +239,7 @@ class InterestConfig:
             "预测",
         ]
     )
-    semantic_blend: float = 0.5
+    semantic_blend: float = 0.7
     blacklist_multiplier: float = 0.25
     # Formula constants are also data-driven so tuning does not require a code edit.
     tuning: dict[str, float] = field(

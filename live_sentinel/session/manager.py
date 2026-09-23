@@ -124,6 +124,21 @@ class SessionManager:
     def _now_iso() -> str:
         return datetime.now(timezone.utc).isoformat()
 
+    @staticmethod
+    def _should_evaluate_semantics(
+        features: AnalysisFeatures,
+        base_score: float,
+        semantic_trigger_threshold: float,
+    ) -> bool:
+        """优先主题必须交给 LLM 判断，不能被较高的规则阈值提前过滤。"""
+
+        whitelist_matches = features.metadata.get("whitelist_matches", ())
+        return bool(
+            whitelist_matches
+            or features.blacklist_score > 0
+            or base_score >= semantic_trigger_threshold
+        )
+
     def _persist_event(self, session_id: str, event: InterestEvent, result: SessionResult) -> None:
         safe_event = InterestEvent(
             event.event_type,
@@ -290,9 +305,10 @@ class SessionManager:
         )
         base_score = self.scorer.score(features)
         semantic = None
-        if self.llm_judge is not None and (
-            base_score >= self.config.interest.candidate_threshold
-            or features.blacklist_score > 0
+        if self.llm_judge is not None and self._should_evaluate_semantics(
+            features,
+            base_score,
+            self.config.interest.semantic_trigger_threshold,
         ):
             try:
                 semantic = self.llm_judge.evaluate(context, features)
@@ -314,8 +330,19 @@ class SessionManager:
                     "topic_continuity": features.topic_continuity,
                     "novelty": features.novelty,
                     "speech_ratio": features.speech_ratio,
+                    "whitelist_matches": list(
+                        features.metadata.get("whitelist_matches", ())
+                    ),
+                    "blacklist_matches": list(
+                        features.metadata.get("blacklist_matches", ())
+                    ),
                 },
                 "semantic": semantic.summary if semantic else None,
+                "semantic_topic": semantic.topic if semantic else None,
+                "semantic_score": semantic.score if semantic else None,
+                "semantic_high_information_density": (
+                    semantic.is_high_information_density if semantic else None
+                ),
             },
         )
         self._persist_event(session.id, analysis_event, result)

@@ -173,7 +173,14 @@ asr:
 - `weights`：各特征权重；
 - `semantic_blend`：规则分与 LLM Judge 分的混合比例；
 - `blacklist_multiplier`：黑名单主题惩罚；
+- `semantic_trigger_threshold`：规则分达到多少时调用 LLM；
 - `candidate_threshold` / `hot_threshold`：状态机阈值。
+
+白名单命中或规则分达到 `semantic_trigger_threshold` 时会进入 LLM 语义判断，
+不再要求规则基础分先达到 `candidate_threshold`。这样“产业优势、定价权、市场
+选择”等用户关注主题，以及没有说出精确关键词但规则信号已足够的投资观点，都可
+由 LLM 判定是否值得发送上线试听提醒；候选和重点阈值仍只负责状态及最终通知，
+避免把词语的一次偶然出现直接当成重点。
 
 所有分析事件会保留特征值，便于之后回看“为什么触发”。
 
