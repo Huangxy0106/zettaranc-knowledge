@@ -8,6 +8,7 @@ import tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -16,6 +17,8 @@ class Checkpoint:
     last_timestamp_ms: int
     last_segment_id: str | None = None
     updated_at: str = ""
+    paused_at: str | None = None
+    runtime_state: dict[str, Any] | None = None
 
     def with_timestamp(self, timestamp_ms: int, segment_id: str | None = None) -> "Checkpoint":
         return Checkpoint(
@@ -23,6 +26,8 @@ class Checkpoint:
             last_timestamp_ms=timestamp_ms,
             last_segment_id=segment_id if segment_id is not None else self.last_segment_id,
             updated_at=datetime.now(timezone.utc).isoformat(),
+            paused_at=self.paused_at,
+            runtime_state=self.runtime_state,
         )
 
 

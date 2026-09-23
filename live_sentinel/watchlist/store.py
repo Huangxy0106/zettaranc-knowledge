@@ -321,6 +321,32 @@ class WatchlistStore:
             )
         return True
 
+    def resume_session(self, source_id: int, session_id: str) -> bool:
+        """Atomically reclaim the same paused live broadcast."""
+
+        now = _utc_now()
+        with self._lock, self._connection:
+            cursor = self._connection.execute(
+                """UPDATE sources SET active_session_id = ?, last_session_status = 'STARTING',
+                observed_state = 'STARTING', session_started_for_live = 1, updated_at = ?
+                WHERE id = ? AND enabled = 1 AND active_session_id IS NULL
+                AND last_session_id = ? AND last_session_status = 'PAUSED'""",
+                (session_id, now, source_id, session_id),
+            )
+            if cursor.rowcount != 1:
+                return False
+            self._connection.execute(
+                """UPDATE runs SET status = 'STARTING', ended_at = NULL, error = NULL
+                WHERE session_id = ? AND source_id = ?""",
+                (session_id, source_id),
+            )
+            self._connection.execute(
+                """INSERT INTO service_events (source_id, event_type, detail, created_at)
+                VALUES (?, 'SESSION_RESUMED', ?, ?)""",
+                (source_id, session_id, now),
+            )
+        return True
+
     def mark_running(self, source_id: int, session_id: str) -> None:
         now = _utc_now()
         with self._lock, self._connection:
@@ -392,7 +418,8 @@ class WatchlistStore:
             self._connection.execute(
                 """UPDATE sources SET active_session_id = NULL,
                 last_session_status = ?, observed_state = ?, last_error = ?,
-                next_check_at = COALESCE(?, next_check_at),
+                next_check_at = CASE WHEN ? = 'PAUSED' THEN 0
+                    ELSE COALESCE(?, next_check_at) END,
                 session_started_for_live = ?,
                 session_failure_count = CASE WHEN ? = 1
                     THEN session_failure_count + 1 ELSE 0 END,
@@ -404,8 +431,9 @@ class WatchlistStore:
                     status,
                     status,
                     safe_error,
+                    status,
                     retry_at,
-                    0 if retryable else 1,
+                    0 if retryable or status == "PAUSED" else 1,
                     int(retryable),
                     int(retryable),
                     now,
@@ -425,7 +453,7 @@ class WatchlistStore:
             )
 
     def recover_orphaned_sessions(self) -> int:
-        """服务重启时把遗留 RUNNING 标为中断，允许仍在线的房间重新启动。"""
+        """Treat un-reaped jobs as paused until per-session artifacts are reconciled."""
 
         now = _utc_now()
         with self._lock, self._connection:
@@ -435,15 +463,14 @@ class WatchlistStore:
             for row in rows:
                 session_id = row["active_session_id"]
                 self._connection.execute(
-                    """UPDATE runs SET status = 'INTERRUPTED', ended_at = ?,
-                    error = 'service restarted before completion' WHERE session_id = ?""",
+                    """UPDATE runs SET status = 'PAUSED', ended_at = ?,
+                    error = NULL WHERE session_id = ?""",
                     (now, session_id),
                 )
                 self._connection.execute(
                     """UPDATE sources SET active_session_id = NULL,
-                    last_session_status = 'INTERRUPTED', observed_state = 'UNKNOWN',
+                    last_session_status = 'PAUSED', observed_state = 'UNKNOWN',
                     session_started_for_live = 0, next_check_at = 0,
-                    session_failure_count = session_failure_count + 1,
                     updated_at = ? WHERE id = ?""",
                     (now, row["id"]),
                 )
@@ -455,7 +482,7 @@ class WatchlistStore:
                         json.dumps(
                             {
                                 "session_id": session_id,
-                                "status": "INTERRUPTED",
+                                "status": "PAUSED",
                                 "reason": "service_restarted",
                             },
                             ensure_ascii=False,
@@ -465,6 +492,30 @@ class WatchlistStore:
                     ),
                 )
         return len(rows)
+
+    def paused_runs(self) -> list[dict[str, object]]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT session_id, source_id FROM runs WHERE status = 'PAUSED'"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def reconcile_orphan_status(self, source_id: int, session_id: str, status: str) -> None:
+        """Resolve a stale Watchlist run using the durable Session state."""
+
+        now = _utc_now()
+        with self._lock, self._connection:
+            self._connection.execute(
+                "UPDATE runs SET status = ?, ended_at = ? WHERE session_id = ?",
+                (status, now, session_id),
+            )
+            self._connection.execute(
+                """UPDATE sources SET last_session_status = ?,
+                session_started_for_live = ?, updated_at = ?
+                WHERE id = ? AND last_session_id = ?""",
+                (status, 0 if status == "INTERRUPTED" else 1,
+                 now, source_id, session_id),
+            )
 
     def interrupted_session_ids(self) -> list[str]:
         with self._lock:

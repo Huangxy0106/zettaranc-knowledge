@@ -20,8 +20,10 @@ from .audio.resample import RealtimeAudioPreprocessor
 from .audio.source import (
     CaptureAuditBuffer,
     DurationLimitedAudioSource,
+    EmptyAudioSource,
     FFmpegAudioSource,
     NonSilenceProbeAudioSource,
+    OffsetAudioSource,
     PreStartHookAudioSource,
     RoomAwareAudioSource,
     RoomStatusSnapshot,
@@ -34,7 +36,7 @@ from .bilibili import BilibiliRoomInfo, USER_AGENT, fetch_room_info
 from .browser_playback import BrowserPlaybackController
 from .config import AppConfig
 from .integrations import IntegrationBundle, build_integrations
-from .models import Session
+from .models import Session, SessionStatus
 from .observability import redact_text
 from .postprocess.pipeline import OfflineFinalizer
 from .session.checkpoint import CheckpointStore
@@ -311,8 +313,6 @@ def run_bilibili_session(
     browser_started_callback: Callable[[], None] | None = None,
 ) -> BilibiliRunResult:
     browser_capture = _browser_capture_required(info, config)
-    if not info.is_live or (not browser_capture and not info.stream_url):
-        raise RuntimeError("房间当前不在线或没有可用播放地址")
     if max_duration_sec is not None and max_duration_sec <= 0:
         raise ValueError("max_duration_sec 必须为正数")
 
@@ -330,6 +330,19 @@ def run_bilibili_session(
         f"%Y%m%d_%H%M%S_%f_room{info.room_id}"
     )
     root = (staging_root or archive_root) / session_id
+    session_root_existed = root.exists()
+    checkpoint_store = CheckpointStore(root / "checkpoint.json")
+    resume_checkpoint = checkpoint_store.load() if session_root_existed else None
+    if session_root_existed and (
+        resume_checkpoint is None
+        or resume_checkpoint.session_id != session_id
+        or not resume_checkpoint.paused_at
+    ):
+        raise RuntimeError(f"已有 Session 目录但没有可恢复的暂停检查点: {root}")
+    if not info.is_live and resume_checkpoint is None:
+        raise RuntimeError("房间当前不在线，且没有待收尾的 Session")
+    if info.is_live and not browser_capture and not info.stream_url:
+        raise RuntimeError("房间当前没有可用播放地址")
     adapters = integrations or build_integrations(config, strict=strict_integrations)
     audio_route: MacOSAudioOutputRoute | None = None
     browser_playback: BrowserPlaybackController | None = None
@@ -342,7 +355,9 @@ def run_bilibili_session(
             if str(room_id).strip()
         }
     )
-    if browser_capture:
+    if not info.is_live:
+        source = EmptyAudioSource()
+    elif browser_capture:
         browser_audio_url = _browser_audio_url_from_env()
         if browser_audio_url and not forced_browser_capture:
             source = FFmpegAudioSource(
@@ -430,7 +445,7 @@ def run_bilibili_session(
             audio_source,
             max_duration_sec * 1000,
         )
-    if browser_capture:
+    if browser_capture and info.is_live:
         capture_audit = CaptureAuditBuffer()
         capture_settings = config.bilibili_capture
         audio_source = RoomAwareAudioSource(
@@ -454,6 +469,12 @@ def run_bilibili_session(
         # keep it outside the room-aware guard so shutdown does not trigger a
         # false "audio ended while live" failure.
         audio_source = StoppableAudioSource(audio_source, stop_event)
+    if resume_checkpoint is not None and info.is_live:
+        audio_source = OffsetAudioSource(
+            audio_source,
+            resume_checkpoint.last_timestamp_ms,
+            resume_checkpoint.paused_at,
+        )
     writer = SegmentArchiveWriter(
         root / "audio" / "working",
         session_id,
@@ -464,12 +485,24 @@ def run_bilibili_session(
         codec=config.audio.archive_codec,
     )
     store = SQLiteStore(root / "session.sqlite")
-    session = Session(
-        id=session_id,
-        room_id=str(info.room_id),
-        up_name=info.uname,
-        start_time=datetime.now(timezone.utc).isoformat(),
-    )
+    if resume_checkpoint is not None:
+        try:
+            session = store.load_session(session_id)
+            if session is None or session.status is not SessionStatus.PAUSED:
+                raise RuntimeError(f"Session 状态不允许接续: {session_id}")
+            writer.restore(store.load_audio_segments(session_id))
+            if writer.segments and writer.segments[-1].end_ms != resume_checkpoint.last_timestamp_ms:
+                raise RuntimeError("检查点与最后分片时间不一致，拒绝覆盖或丢弃音频")
+        except Exception:
+            store.close()
+            raise
+    else:
+        session = Session(
+            id=session_id,
+            room_id=str(info.room_id),
+            up_name=info.uname,
+            start_time=datetime.now(timezone.utc).isoformat(),
+        )
     manager = SessionManager(
         config,
         audio_source,
@@ -492,11 +525,13 @@ def run_bilibili_session(
         backup=adapters.backup,
         store=store,
         artifacts=SessionArtifacts(root),
-        checkpoint_store=CheckpointStore(root / "checkpoint.json"),
+        checkpoint_store=checkpoint_store,
         offline_finalizer=OfflineFinalizer(root / "final", offline_asr=adapters.offline_asr),
-        realtime_enabled=not isinstance(adapters.realtime_asr, NullStreamingASR),
+        realtime_enabled=info.is_live and not isinstance(adapters.realtime_asr, NullStreamingASR),
         defer_delivery=staging_root is not None,
         capture_audit=capture_audit,
+        resume_checkpoint=resume_checkpoint,
+        stop_event=stop_event,
     )
     try:
         result = manager.run(session)
@@ -508,7 +543,7 @@ def run_bilibili_session(
             )
         store.close()
 
-    if staging_root is not None:
+    if staging_root is not None and result.session.status is not SessionStatus.PAUSED:
         root = _finish_staged_delivery(
             manager=manager,
             result=result,

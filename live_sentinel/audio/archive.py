@@ -69,10 +69,35 @@ class SegmentArchiveWriter:
         self.output_dir.chmod(0o700)
         self._started = True
 
+    def restore(self, segments: list[CompletedSegment]) -> None:
+        """Continue after a clean pause without ever overwriting old audio."""
+
+        if self._started or self.segments:
+            raise ArchiveError("只能在首次 start 前恢复分片")
+        ordered = sorted(segments, key=lambda item: item.start_ms)
+        for segment in ordered:
+            if not segment.file_path.is_file() or not segment.checksum:
+                raise ArchiveError(f"旧分片不可验证: {segment.file_path}")
+            if sha256_file(segment.file_path) != segment.checksum:
+                raise ArchiveError(f"旧分片校验失败: {segment.file_path}")
+        self.segments = ordered
+        if ordered:
+            self._last_end_ms = ordered[-1].end_ms
+            self._index = max(int(item.id.rsplit("-", 1)[-1]) for item in ordered) + 1
+        # An uncleanly terminated encoder can leave an unindexed file. Never
+        # overwrite it or silently omit it from the archive.
+        unknown = set(self.output_dir.glob("segment_*")) - {
+            item.file_path for item in ordered
+        }
+        if unknown:
+            raise ArchiveError(f"存在未核验的旧分片: {sorted(unknown)[0]}")
+
     def _open_segment(self, start_ms: int) -> None:
         self._current_start_ms = start_ms
         self._current_end_ms = start_ms
         path = self.output_dir / f"segment_{self._index:03d}_{start_ms:012d}{self._suffix}"
+        if path.exists():
+            raise ArchiveError(f"拒绝覆盖已有分片: {path}")
         if self.codec == "flac":
             if shutil.which(self.ffmpeg_bin) is None:
                 raise ArchiveError(

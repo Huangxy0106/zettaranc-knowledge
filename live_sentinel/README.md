@@ -295,14 +295,18 @@ sentinel --config config.user.json --env-file .live-sentinel.env status
 ```bash
 sentinel --config config.user.json --env-file .live-sentinel.env service install
 sentinel --config config.user.json --env-file .live-sentinel.env service status
+sentinel --config config.user.json --env-file .live-sentinel.env service restart
 ```
 
 服务把 desired state 和 observed state 分开保存在
 `watchlist.state_db`。同一规范 room_id 同时最多一个 Session；一次 Session 完成后，必须先
 观测到 OFFLINE，再观测到下一次 LIVE 才会重启，避免重复录制同一场。发现错误采用指数退避；
 每次发现结果或错误都会追加到 `service_events`，因此历史轮询不再只剩最后一次快照。
-服务重启会把遗留 RUNNING 标记为 INTERRUPTED，同时同步对应 Session 的 SQLite 和 JSON，
-并允许仍在线房间恢复。`source disable`
+使用 `service restart` 时，采集中的 Session 会封存当前分片、实时转写和兴趣状态为 PAUSED；
+重启后仍在线则沿用同一 Session ID 续录，停机期间的音频缺口记入 `CAPTURE_GAP`，
+已经下播则在原 Session 中合并和离线处理。未核验的旧分片不会被覆盖；
+意外强杀或掉电留下的不完整分片会阻止自动接续，需人工核查。
+`source disable`
 停止后续自动启动，但不会粗暴中断正在归档的本场 Session。
 
 本机凭据可放在 gitignored 的 `.live-sentinel.env`，每行 `KEY=VALUE`；建议权限为 `0600`。

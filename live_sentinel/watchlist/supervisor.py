@@ -5,6 +5,7 @@ from __future__ import annotations
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, time as datetime_time, timedelta, timezone
+import json
 import logging
 from pathlib import Path
 import signal
@@ -16,6 +17,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from ..bilibili import BilibiliRoomInfo, fetch_room_info
 from ..config import AppConfig
 from ..runner import BilibiliRunResult, run_bilibili_session
+from ..session.checkpoint import CheckpointStore
 from ..session.recovery import mark_session_interrupted
 from .models import WatchSource
 from .store import WatchlistStore
@@ -32,6 +34,7 @@ class _ActiveRun:
     source_id: int
     session_id: str
     future: Future[BilibiliRunResult]
+    is_resume: bool = False
 
 
 class WatchlistSupervisor:
@@ -186,7 +189,10 @@ class WatchlistSupervisor:
             max_duration_sec=self.config.watchlist.max_session_minutes * 60,
             session_id=session_id,
             stop_event=self.stop_event,
-            activate_browser=not source.browser_opened_for_live,
+            activate_browser=(
+                source.last_session_status == "PAUSED"
+                or not source.browser_opened_for_live
+            ),
             browser_started_callback=lambda: self.store.mark_browser_opened(source.id),
         )
 
@@ -242,19 +248,52 @@ class WatchlistSupervisor:
             if root not in roots:
                 roots.append(root)
         reconciled = 0
+        for paused in self.store.paused_runs():
+            session_id = str(paused["session_id"])
+            source_id = int(paused["source_id"])
+            recoverable = False
+            for base in roots:
+                session_root = base / session_id
+                if not session_root.is_dir():
+                    continue
+                self.store.set_run_artifact_path(session_id, str(session_root))
+                try:
+                    payload = json.loads((session_root / "session.json").read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    payload = {}
+                status = payload.get("status")
+                if status == "PAUSED":
+                    try:
+                        checkpoint = CheckpointStore(session_root / "checkpoint.json").load()
+                    except (OSError, ValueError, TypeError):
+                        checkpoint = None
+                    recoverable = bool(
+                        checkpoint and checkpoint.session_id == session_id
+                        and checkpoint.paused_at
+                    )
+                elif status in {"COMPLETED", "RETAINED_IN_STAGING"}:
+                    self.store.reconcile_orphan_status(source_id, session_id, str(status))
+                    recoverable = True
+                    reconciled += 1
+                if not recoverable:
+                    changed = mark_session_interrupted(
+                        session_root, session_id, ended_at=ended_at,
+                    )
+                    if changed:
+                        reconciled += 1
+                break
+            if not recoverable:
+                self.store.reconcile_orphan_status(source_id, session_id, "INTERRUPTED")
+        # Retain the older reconciliation path for sessions interrupted before
+        # this version was installed, and for unclean restarts rejected above.
         for session_id in self.store.interrupted_session_ids():
             for base in roots:
                 session_root = base / session_id
                 if not session_root.is_dir():
                     continue
-                changed = mark_session_interrupted(
-                    session_root,
-                    session_id,
-                    ended_at=ended_at,
-                )
-                self.store.set_run_artifact_path(session_id, str(session_root))
-                if changed:
+                if mark_session_interrupted(session_root, session_id, ended_at=ended_at):
                     reconciled += 1
+                self.store.set_run_artifact_path(session_id, str(session_root))
                 break
         return recovered, reconciled
 
@@ -290,10 +329,11 @@ class WatchlistSupervisor:
                         retry_at,
                         now + self.config.watchlist.capture_silence_circuit_break_sec,
                     )
+                failure_status = "RECOVERY_BLOCKED" if active.is_resume else "FAILED"
                 self.store.finish_session(
                     source_id,
                     active.session_id,
-                    status="FAILED",
+                    status=failure_status,
                     error=f"{type(exc).__name__}: {exc}",
                     retry_at=retry_at,
                 )
@@ -318,6 +358,11 @@ class WatchlistSupervisor:
                             source_id,
                         )
                 LOGGER.exception("Session %s failed", active.session_id)
+                if active.is_resume:
+                    self._send_alert(
+                        f"Live Sentinel 原会话 {active.session_id} 接续失败，已阻止新会话覆盖旧归档；请检查日志。",
+                        source_id,
+                    )
 
     def run_once(self) -> None:
         self._reap()
@@ -348,12 +393,25 @@ class WatchlistSupervisor:
                 name=info.uname if source.name == source.room_id else None,
             )
             refreshed = self.store.get_source(source.id)
-            if not info.is_live or refreshed is None:
+            if refreshed is None:
+                continue
+            is_resume = (
+                refreshed.last_session_status == "PAUSED"
+                and bool(refreshed.last_session_id)
+            )
+            if not info.is_live and not is_resume:
                 continue
             if refreshed.session_started_for_live or capacity <= 0:
                 continue
-            session_id = self._session_id(source.room_id)
-            if not self.store.claim_session(source.id, session_id):
+            session_id = (
+                str(refreshed.last_session_id)
+                if is_resume else self._session_id(source.room_id)
+            )
+            claimed = (
+                self.store.resume_session(source.id, session_id)
+                if is_resume else self.store.claim_session(source.id, session_id)
+            )
+            if not claimed:
                 continue
             try:
                 future = self._executor.submit(self.runner, refreshed, info, session_id)
@@ -367,7 +425,7 @@ class WatchlistSupervisor:
                 )
                 raise
             self.store.mark_running(source.id, session_id)
-            self._active[source.id] = _ActiveRun(source.id, session_id, future)
+            self._active[source.id] = _ActiveRun(source.id, session_id, future, is_resume)
             capacity -= 1
             LOGGER.info("Started Session %s for room %s", session_id, source.room_id)
 
@@ -393,6 +451,7 @@ class WatchlistSupervisor:
             # Active audio sources own their ffmpeg lifecycle. Do not accept new
             # work; already-running sessions get a bounded opportunity to finish.
             self._executor.shutdown(wait=True, cancel_futures=True)
+            self._reap()
             LOGGER.info("Watchlist service stopped")
 
     @property

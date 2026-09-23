@@ -82,11 +82,11 @@ llm:
   max_tokens: 500
 
 interest:
-  whitelist: [AI, Agent, 大模型, 投资, 产业, 行业, 新能源, 制造业, 科技, 芯片, 定价权, 市场选择, 流动性, 估值, 仓位, 策略]
+  whitelist: [AI, Agent, 大模型, 投资, 产业, 行业, 新能源, 制造业, 科技, 芯片, 定价权, 市场选择, 流动性, 估值, 仓位, 策略, 资本市场, 筹码交换, 外资, 国家意志, 垃圾时间, 货币政策, 核心资产, 国运, 交易, 预期收益率, 市值, 大股东, A股, 美股, 纳斯达克, 盈利模式]
   blacklist: [星座, 起名, 情感聊天, 日常闲聊]
-  semantic_trigger_threshold: 0.3
+  semantic_trigger_threshold: 0.29
   candidate_threshold: 0.5
-  hot_threshold: 0.65
+  hot_threshold: 0.6
   leave_hot_threshold: 0.45
   enter_hot_consecutive_windows: 2
   leave_hot_consecutive_windows: 3

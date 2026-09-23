@@ -309,8 +309,38 @@ class WatchlistTests(unittest.TestCase):
         source = self.store.get_source(self.source.id)
         assert source is not None
         self.assertIsNone(source.active_session_id)
-        self.assertEqual(source.last_session_status, "INTERRUPTED")
+        self.assertEqual(source.last_session_status, "PAUSED")
         self.assertFalse(source.session_started_for_live)
+
+    def test_paused_session_reuses_id_and_finishes_when_room_is_offline(self) -> None:
+        seen: list[tuple[str, bool]] = []
+
+        def discover(_source):
+            return self._info(len(seen) == 0)
+
+        def run(source, info, session_id):
+            seen.append((session_id, info.is_live))
+            session = Session(
+                session_id, source.room_id, source.name, "original-start",
+                status=SessionStatus.PAUSED if len(seen) == 1 else SessionStatus.COMPLETED,
+            )
+            return BilibiliRunResult(self.root / session_id, SessionResult(session))
+
+        supervisor = WatchlistSupervisor(
+            self._config(), self.store, discovery=discover, runner=run,
+            clock=lambda: 100.0,
+        )
+        supervisor.run_once()
+        next(iter(supervisor._active.values())).future.result()
+        supervisor.run_once()
+        next(iter(supervisor._active.values())).future.result()
+        supervisor.run_once()
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(seen[0][0], seen[1][0])
+        self.assertEqual(seen[1][1], False)
+        self.assertEqual(self.store.recent_runs()[0]["status"], "COMPLETED")
+        supervisor.stop_event.set()
+        supervisor._executor.shutdown(wait=True)
 
     def test_recovery_reconciles_watchlist_and_session_artifacts(self) -> None:
         config = self._config()

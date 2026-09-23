@@ -10,6 +10,7 @@ from abc import ABC, abstractmethod
 from array import array
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from queue import Empty, Queue
 import shutil
 import subprocess
@@ -726,3 +727,48 @@ class StoppableAudioSource(AudioSource):
 
     def stop(self) -> None:
         self.source.stop()
+
+
+class OffsetAudioSource(AudioSource):
+    """Map a new capture process onto an existing Session wall-clock timeline."""
+
+    def __init__(self, source: AudioSource, previous_end_ms: int, paused_at: str):
+        self.source = source
+        self.previous_end_ms = previous_end_ms
+        self.paused_at = datetime.fromisoformat(paused_at)
+        self._offset_ms: int | None = None
+
+    def start(self) -> None:
+        self.source.start()
+        # A non-silence probe can buffer the first seconds of audio before
+        # returning its first frame. Anchor at capture startup, not at that
+        # delayed read, so the buffered audio is not counted as downtime.
+        downtime_ms = max(
+            0,
+            round((datetime.now(timezone.utc) - self.paused_at).total_seconds() * 1000),
+        )
+        self._offset_ms = self.previous_end_ms + downtime_ms
+
+    def read(self) -> AudioFrame | None:
+        frame = self.source.read()
+        if frame is None:
+            return None
+        if self._offset_ms is None:
+            raise RuntimeError("OffsetAudioSource 尚未 start")
+        return AudioFrame(
+            timestamp_ms=frame.timestamp_ms + self._offset_ms,
+            pcm=frame.pcm,
+            sample_rate=frame.sample_rate,
+            channels=frame.channels,
+            sample_width=frame.sample_width,
+        )
+
+    def stop(self) -> None:
+        self.source.stop()
+
+
+class EmptyAudioSource(AudioSource):
+    """Finalize a paused Session when the room went offline during downtime."""
+
+    def read(self) -> AudioFrame | None:
+        return None

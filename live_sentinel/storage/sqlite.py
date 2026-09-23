@@ -10,7 +10,7 @@ from typing import Any, Mapping, Sequence
 
 from ..audio.finalizer import FinalAudio
 from ..audio.segment import CompletedSegment
-from ..models import Highlight, InterestEvent, Session, TranscriptSegment
+from ..models import Highlight, InterestEvent, Session, SessionStatus, TranscriptSegment
 from ..observability import redact_payload
 
 
@@ -119,6 +119,41 @@ class SQLiteStore:
 
     def update_session(self, session: Session) -> None:
         self.create_session(session)
+
+    def load_session(self, session_id: str) -> Session | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        return Session(
+            id=row["id"], room_id=row["room_id"], up_name=row["up_name"],
+            start_time=row["start_time"], status=SessionStatus(row["status"]),
+            end_time=row["end_time"], duration_ms=row["duration_ms"],
+            final_audio_path=row["final_audio_path"],
+        )
+
+    def load_audio_segments(self, session_id: str) -> list[CompletedSegment]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT * FROM audio_segments WHERE session_id = ? ORDER BY start_ms, id",
+                (session_id,),
+            ).fetchall()
+        return [CompletedSegment(
+            id=row["id"], file_path=Path(row["file_path"]),
+            start_ms=row["start_ms"], end_ms=row["end_ms"],
+            status=row["status"], checksum=row["checksum"],
+        ) for row in rows]
+
+    def load_realtime_transcripts(self, session_id: str) -> list[TranscriptSegment]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT start_ms, end_ms, text, confidence FROM realtime_transcripts "
+                "WHERE session_id = ? ORDER BY start_ms, end_ms", (session_id,),
+            ).fetchall()
+        return [TranscriptSegment(row["start_ms"], row["end_ms"], row["text"],
+                                  row["confidence"]) for row in rows]
 
     def add_audio_segment(self, session_id: str, segment: CompletedSegment) -> None:
         with self._lock, self._connection:

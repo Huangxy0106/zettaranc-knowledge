@@ -178,6 +178,22 @@ class InterestConfig:
             "估值",
             "仓位",
             "策略",
+            "资本市场",
+            "筹码交换",
+            "外资",
+            "国家意志",
+            "垃圾时间",
+            "货币政策",
+            "核心资产",
+            "国运",
+            "交易",
+            "预期收益率",
+            "市值",
+            "大股东",
+            "A股",
+            "美股",
+            "纳斯达克",
+            "盈利模式",
         ]
     )
     blacklist: list[str] = field(
@@ -185,11 +201,11 @@ class InterestConfig:
     )
     # 低成本规则分只负责决定是否值得调用 LLM；最终候选/重点阈值独立设置。
     # 这样隐含的投资观点不会因为没说出精确关键词而直接写成 semantic=null。
-    semantic_trigger_threshold: float = 0.30
+    semantic_trigger_threshold: float = 0.29
     # 即时提醒用于提示用户是否值得上线试听，不要求内容已经形成可执行结论。
     # LLM 语义分主导最终判定；规则分仍负责提供可解释的先验信号。
     candidate_threshold: float = 0.50
-    hot_threshold: float = 0.65
+    hot_threshold: float = 0.60
     leave_hot_threshold: float = 0.45
     enter_hot_consecutive_windows: int = 2
     leave_hot_consecutive_windows: int = 3

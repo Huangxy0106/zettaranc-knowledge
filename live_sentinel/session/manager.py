@@ -76,6 +76,8 @@ class SessionManager:
         realtime_enabled: bool | None = None,
         defer_delivery: bool = False,
         capture_audit: CaptureAuditBuffer | None = None,
+        resume_checkpoint: Checkpoint | None = None,
+        stop_event: threading.Event | None = None,
     ):
         self.config = config
         self.audio_source = audio_source
@@ -108,6 +110,8 @@ class SessionManager:
         self.checkpoint_interval_ms = checkpoint_interval_sec * 1000
         self.defer_delivery = defer_delivery
         self.capture_audit = capture_audit
+        self.resume_checkpoint = resume_checkpoint
+        self.stop_event = stop_event
         self._state_lock = threading.RLock()
         realtime_provider = config.asr.realtime.provider.strip().lower()
         configured_realtime = bool(
@@ -638,6 +642,17 @@ class SessionManager:
         self.state_machine = self.state_machine or InterestStateMachine(
             session.id, self.config.interest
         )
+        if self.resume_checkpoint is not None:
+            runtime = self.resume_checkpoint.runtime_state or {}
+            if "interest" in runtime:
+                self.state_machine.restore(runtime["interest"])
+            if hasattr(self.analyzer, "_last_topic"):
+                self.analyzer._last_topic = str(runtime.get("last_topic", ""))
+                self.analyzer._last_text = str(runtime.get("last_text", ""))
+            if self.store is not None:
+                previous_transcripts = self.store.load_realtime_transcripts(session.id)
+                self.transcript_buffer.extend(previous_transcripts)
+                result.realtime_transcripts.extend(previous_transcripts)
         if self.store is not None:
             self.store.create_session(session)
         if self.artifacts is not None:
@@ -647,10 +662,16 @@ class SessionManager:
             self.store.update_session(session)
         if self.artifacts is not None:
             self.artifacts.write_session(session)
-        last_frame_end_ms = 0
-        last_checkpoint_ms = -self.checkpoint_interval_ms
+        last_frame_end_ms = (
+            self.resume_checkpoint.last_timestamp_ms if self.resume_checkpoint else 0
+        )
+        last_checkpoint_ms = last_frame_end_ms
         next_analysis_ms: int | None = None
-        last_analysis_ms: int | None = None
+        resume_gap_recorded = False
+        last_analysis_ms: int | None = (
+            (self.resume_checkpoint.runtime_state or {}).get("last_analysis_ms")
+            if self.resume_checkpoint else None
+        )
         archive_closed = False
         recording_stage_done = False
         realtime_stage_started = False
@@ -692,6 +713,19 @@ class SessionManager:
                 self.store.update_session(session)
             if self.artifacts is not None:
                 self.artifacts.write_session(session)
+            if self.resume_checkpoint is not None:
+                self._persist_event(
+                    session.id,
+                    InterestEvent(
+                        "SESSION_RESUMED", last_frame_end_ms,
+                        self.state_machine.state, 0.0,
+                        payload={
+                            "at": self._now_iso(),
+                            "previous_end_ms": self.resume_checkpoint.last_timestamp_ms,
+                        },
+                    ),
+                    result,
+                )
             if self.realtime_enabled:
                 self.record_stage(result, "realtime_asr", "STARTED")
                 realtime_stage_started = True
@@ -720,6 +754,28 @@ class SessionManager:
                     self._drain_capture_audit(session, result)
                 if frame is None:
                     break
+                if self.resume_checkpoint is not None and not resume_gap_recorded:
+                    resume_gap_recorded = True
+                    if frame.timestamp_ms > self.resume_checkpoint.last_timestamp_ms:
+                        self._persist_event(
+                            session.id,
+                            InterestEvent(
+                                "CAPTURE_GAP",
+                                frame.timestamp_ms,
+                                self.state_machine.state,
+                                0.0,
+                                payload={
+                                    "start_ms": self.resume_checkpoint.last_timestamp_ms,
+                                    "end_ms": frame.timestamp_ms,
+                                    "duration_ms": (
+                                        frame.timestamp_ms
+                                        - self.resume_checkpoint.last_timestamp_ms
+                                    ),
+                                    "reason": "service_restart",
+                                },
+                            ),
+                            result,
+                        )
                 last_frame_end_ms = max(last_frame_end_ms, frame.end_ms)
                 # 先发布再消费，保证生产架构和真实异步适配器一致。
                 self.tee.publish(frame, include_realtime=self.realtime_enabled)
@@ -737,7 +793,12 @@ class SessionManager:
                     last_checkpoint_ms = frame.end_ms
                 if self.realtime_enabled:
                     if next_analysis_ms is None:
-                        next_analysis_ms = interval_ms
+                        # A resumed capture has a real wall-time gap. Do not
+                        # manufacture analysis windows for the missing audio.
+                        next_analysis_ms = (
+                            frame.end_ms + interval_ms
+                            if self.resume_checkpoint else interval_ms
+                        )
                     while next_analysis_ms is not None and frame.end_ms >= next_analysis_ms:
                         self._enqueue_latest_analysis(
                             session,
@@ -781,11 +842,48 @@ class SessionManager:
                     result,
                     analysis_tasks,
                 )
+                last_analysis_ms = last_frame_end_ms
             analysis_stop.set()
             if analysis_thread is not None:
                 # LLM/notification are allowed to delay post-processing, but they
                 # can no longer delay or corrupt the already completed capture.
                 analysis_thread.join()
+            if self.stop_event is not None and self.stop_event.is_set():
+                self.audio_source.stop()
+                segments = self.archive_writer.close()
+                archive_closed = True
+                if self.store is not None:
+                    for segment in segments:
+                        self.store.add_audio_segment(session.id, segment)
+                paused_at = self._now_iso()
+                if self.checkpoint_store is not None:
+                    runtime_state = {
+                        "interest": self.state_machine.snapshot(),
+                        "last_topic": getattr(self.analyzer, "_last_topic", ""),
+                        "last_text": getattr(self.analyzer, "_last_text", ""),
+                        "last_analysis_ms": last_analysis_ms,
+                    }
+                    self.checkpoint_store.save(Checkpoint(
+                        session.id, last_frame_end_ms,
+                        segments[-1].id if segments else None,
+                        updated_at=paused_at, paused_at=paused_at,
+                        runtime_state=runtime_state,
+                    ))
+                session.status = SessionStatus.PAUSED
+                session.duration_ms = last_frame_end_ms
+                session.end_time = None
+                self._persist_event(
+                    session.id,
+                    InterestEvent(
+                        "SESSION_PAUSED", last_frame_end_ms,
+                        self.state_machine.state, 0.0,
+                        payload={"at": paused_at, "segment_count": len(segments)},
+                    ),
+                    result,
+                )
+                self._write_session_state(session)
+                result.highlights = list(self.state_machine.highlights)
+                return result
             session.status = SessionStatus.STOPPING
             session.duration_ms = last_frame_end_ms
             end_event = self.state_machine.close(last_frame_end_ms)

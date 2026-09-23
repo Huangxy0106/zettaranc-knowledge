@@ -11,7 +11,7 @@ import sys
 from .bilibili import fetch_room_info
 from .config import AppConfig, load_config
 from .integrations import build_notifier, build_summary_notifier
-from .launchd import bootstrap, service_status, uninstall, write_plist
+from .launchd import bootstrap, graceful_restart, service_status, uninstall, write_plist
 from .observability import configure_service_logging, redact_text
 from .watchlist.store import WatchlistStore
 from .watchlist.supervisor import WatchlistSupervisor
@@ -122,6 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
     install = service_commands.add_parser("install", help="安装并启动 launchd 用户服务")
     install.add_argument("--no-start", action="store_true", help="只写 plist，不立即加载")
     service_commands.add_parser("status", help="查看 launchd 服务状态")
+    service_commands.add_parser("restart", help="等待会话安全暂停后重启服务")
     service_commands.add_parser("uninstall", help="停止并移除 launchd 用户服务")
     return parser
 
@@ -192,6 +193,10 @@ def main(argv: list[str] | None = None) -> int:
                 loaded, state = service_status()
                 print(f"{'loaded' if loaded else 'not loaded'}: {state}")
                 return 0 if loaded else 1
+            if args.service_command == "restart":
+                graceful_restart()
+                print("服务已安全重启；暂停的 Session 将沿用原编号继续。")
+                return 0
             if args.service_command == "uninstall":
                 print("已移除" if uninstall() else "未安装")
                 return 0

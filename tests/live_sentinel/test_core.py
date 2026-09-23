@@ -17,7 +17,8 @@ from live_sentinel.config import InterestConfig, load_config
 from live_sentinel.interest.scorer import InterestScorer
 from live_sentinel.interest.state_machine import InterestStateMachine
 from live_sentinel.analysis.analyzer import RuleBasedContentAnalyzer
-from live_sentinel.models import AnalysisFeatures, AudioFrame, InterestState, TranscriptSegment
+from live_sentinel.analysis.llm_judge import OpenAICompatibleLLMJudge
+from live_sentinel.models import AnalysisFeatures, AudioFrame, InterestState, SemanticResult, TranscriptSegment
 from live_sentinel.transcript.buffer import TranscriptBuffer
 from live_sentinel.session.checkpoint import Checkpoint, CheckpointStore
 from live_sentinel.session.manager import SessionManager
@@ -67,6 +68,36 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(config.audio.segment_minutes, 120)
         self.assertIn("AI", config.interest.whitelist)
         self.assertEqual(config.bilibili_capture.offline_confirmations, 3)
+
+    def test_investment_recall_tuning_keeps_semantic_gate_separate_from_alert(self) -> None:
+        config = InterestConfig()
+        analyzer = RuleBasedContentAnalyzer(config.whitelist, config.blacklist)
+        features = analyzer.analyze(
+            [TranscriptSegment(0, 1000, "预期收益率和市值变化要结合交易风险判断")]
+        )
+        self.assertIn("预期收益率", features.metadata["whitelist_matches"])
+        self.assertIn("市值", features.metadata["whitelist_matches"])
+        self.assertTrue(
+            SessionManager._should_evaluate_semantics(features, 0.265, config.semantic_trigger_threshold)
+        )
+        self.assertFalse(
+            SessionManager._should_evaluate_semantics(
+                analyzer.analyze([TranscriptSegment(0, 1000, "这款茶叶的价格适合送礼")]),
+                0.265,
+                config.semantic_trigger_threshold,
+            )
+        )
+        self.assertEqual(config.semantic_trigger_threshold, 0.29)
+        self.assertEqual(config.hot_threshold, 0.60)
+        # A meaningful but colloquial investment passage can have a weak rule prior.
+        low_rule_features = AnalysisFeatures(information_density=1.0, novelty=1.0, topic_continuity=0.15)
+        self.assertLess(InterestScorer(config).score(low_rule_features), 0.30)
+        self.assertGreaterEqual(
+            InterestScorer(config).score(low_rule_features, SemanticResult(score=0.75)),
+            config.hot_threshold,
+        )
+        self.assertIn("不能因没有说出“投资”一词而漏判", OpenAICompatibleLLMJudge._SYSTEM_PROMPT)
+        self.assertIn("如果没有连到投资、产业或宏观判断，应低分", OpenAICompatibleLLMJudge._SYSTEM_PROMPT)
 
     def test_checkpoint_store_is_readable_after_atomic_save(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -173,6 +204,34 @@ class CoreTests(unittest.TestCase):
         leave = machine.update(5000, 0.2)
         self.assertEqual(leave.event_type, "LEAVE_HOT")
         self.assertIsNone(machine.active_highlight)
+
+    def test_interest_state_restores_hot_context_without_duplicate_alert(self) -> None:
+        config = InterestConfig(
+            candidate_threshold=0.5,
+            hot_threshold=0.8,
+            leave_hot_threshold=0.3,
+            enter_hot_consecutive_windows=2,
+            leave_hot_consecutive_windows=2,
+            notification_cooldown_sec=600,
+        )
+        before = InterestStateMachine("same-session", config)
+        before.update(0, 0.6)
+        before.update(1000, 0.9)
+        first_hot = before.update(2000, 0.9, "投资", "重要观点")
+        self.assertTrue(first_hot.payload["notify"])
+        restored = InterestStateMachine("same-session", config)
+        restored.restore(before.snapshot())
+        self.assertEqual(restored.active_highlight.id, first_hot.highlight_id)
+        self.assertIsNone(restored.update(3000, 0.9, "投资", "继续"))
+        self.assertEqual(len(restored.highlights), 1)
+        restored.update(4000, 0.2)
+        restored.update(5000, 0.2)
+        restored.update(6000, 0.2)
+        restored.update(7000, 0.6)
+        restored.update(8000, 0.9)
+        next_hot = restored.update(9000, 0.9, "产业", "另一个观点")
+        self.assertEqual(next_hot.highlight_id, "hl_002")
+        self.assertFalse(next_hot.payload["notify"])
 
     def test_timeline_reports_gaps_and_rejects_overlap(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

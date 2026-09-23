@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from ..config import InterestConfig
 from ..models import Highlight, InterestEvent, InterestState
 
@@ -18,6 +19,32 @@ class InterestStateMachine:
         self._last_notification_ms: int | None = None
         self.active_highlight: Highlight | None = None
         self.highlights: list[Highlight] = []
+
+    def snapshot(self) -> dict[str, object]:
+        return {
+            "state": self.state.value,
+            "hot_streak": self._hot_streak,
+            "leave_streak": self._leave_streak,
+            "cooling_streak": self._cooling_streak,
+            "next_highlight": self._next_highlight,
+            "last_notification_ms": self._last_notification_ms,
+            "active_highlight_id": self.active_highlight.id if self.active_highlight else None,
+            "highlights": [asdict(item) for item in self.highlights],
+        }
+
+    def restore(self, state: dict[str, object]) -> None:
+        self.state = InterestState(str(state["state"]))
+        self._hot_streak = int(state["hot_streak"])
+        self._leave_streak = int(state["leave_streak"])
+        self._cooling_streak = int(state["cooling_streak"])
+        self._next_highlight = int(state["next_highlight"])
+        notification = state.get("last_notification_ms")
+        self._last_notification_ms = int(notification) if notification is not None else None
+        self.highlights = [Highlight(**item) for item in state.get("highlights", [])]
+        active_id = state.get("active_highlight_id")
+        self.active_highlight = next(
+            (item for item in self.highlights if item.id == active_id), None
+        )
 
     def _new_highlight(self, timestamp_ms: int, score: float, topic: str, summary: str) -> Highlight:
         highlight = Highlight(
