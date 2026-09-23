@@ -320,8 +320,10 @@ Cookie 到期后需要重新导入，并重启 Watchlist 服务使新进程重�
 
 如果登录页只提供 DRM 流，系统不会尝试破解 DRM。可以把已获授权播放器的系统音频
 输出到虚拟设备，再由 AVFoundation 回采。以下配置会在 Session 开始时把系统输出
-切到 BlackHole，并在 Session 结束、失败或受控停止后继续保持 BlackHole，不自动
-恢复 Mac mini 扬声器。该 fail-safe 策略避免无人值守时突然外放；但其他应用和
+切到 BlackHole，确认当前输出精确为 `BlackHole 2ch` 后才将系统输出音量设为
+100% 并取消静音。Session 结束、失败或受控停止后继续保持 BlackHole 及
+当前音量，不自动恢复 Mac mini 扬声器或原音量。该 fail-safe 策略避免无人值守时
+突然外放；但其他应用和
 系统通知的声音也可能进入录音。需要扬声器时，必须由用户手动切回：
 
 ```bash
