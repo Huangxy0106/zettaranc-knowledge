@@ -10,6 +10,7 @@ from live_sentinel.runner import (
     _bilibili_room_status_probe,
     _browser_audio_url_from_env,
     _browser_capture_required,
+    _playback_output_device,
 )
 
 
@@ -69,6 +70,22 @@ class BrowserAudioUrlTests(unittest.TestCase):
     def test_empty_value_disables_bridge(self) -> None:
         with patch.dict(os.environ, {"BILIBILI_DRM_AUDIO_URL": ""}, clear=False):
             self.assertIsNone(_browser_audio_url_from_env())
+
+    def test_playback_output_can_differ_from_capture_device(self) -> None:
+        self.assertEqual(
+            _playback_output_device("BlackHole 2ch", "LiveSentinel Monitor"),
+            "LiveSentinel Monitor",
+        )
+
+    def test_empty_playback_output_preserves_silent_capture_route(self) -> None:
+        self.assertEqual(
+            _playback_output_device("BlackHole 2ch", ""),
+            "BlackHole 2ch",
+        )
+
+    def test_playback_output_rejects_multiline_device_name(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "playback_output_device"):
+            _playback_output_device("BlackHole 2ch", "Monitor\nInjected")
 
     def test_browser_controller_opens_only_authorized_bilibili_page(self) -> None:
         completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")

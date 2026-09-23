@@ -32,6 +32,10 @@ class BilibiliCaptureConfig:
     # capture, even while the public stream URL is still available.  This
     # avoids changing capture transports when a live session becomes paid.
     browser_audio_room_ids: list[str] = field(default_factory=list)
+    # System playback can target a macOS Multi-Output Device while FFmpeg keeps
+    # capturing the virtual device named by BILIBILI_DRM_AUDIO_DEVICE. Empty
+    # preserves the original silent behavior by routing to the capture device.
+    playback_output_device: str = ""
     status_poll_interval_sec: int = 30
     offline_confirmations: int = 3
     offline_confirmation_interval_sec: int = 5

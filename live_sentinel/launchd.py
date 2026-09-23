@@ -48,7 +48,10 @@ def write_plist(
         "WorkingDirectory": str(Path(working_directory).resolve()),
         "RunAtLoad": True,
         "KeepAlive": {"SuccessfulExit": False},
-        "ProcessType": "Background",
+        # Continuous CoreAudio capture is latency-sensitive. Background jobs
+        # receive CPU and I/O throttling that can make AVFoundation deliver
+        # audio far slower than wall time, corrupting the archive timeline.
+        "ProcessType": "Interactive",
         "EnvironmentVariables": {"PATH": DEFAULT_SERVICE_PATH},
         "StandardOutPath": str(logs / "watchlist.out.log"),
         # Python logging owns watchlist.err.log and rotates it daily. Keep raw

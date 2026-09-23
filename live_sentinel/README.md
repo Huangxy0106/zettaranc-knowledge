@@ -303,7 +303,8 @@ launchd 日志位于 `~/Library/Logs/LiveSentinel/`，plist 位于
 `~/Library/LaunchAgents/com.zettaranc.live-sentinel.watchlist.plist`。主服务日志
 `watchlist.err.log` 每日轮转并保留 14 天；launchd 原始 stderr 单独写入
 `watchlist.launchd.err.log`，避免干扰轮转。日志、Watchlist 错误和 Session 事件共用
-同一套凭据脱敏规则。
+同一套凭据脱敏规则。launchd 作业使用 `ProcessType=Interactive`，避免
+Background 资源节流使 AVFoundation 采集速度低于墙钟时间。
 
 普通公开直播默认使用匿名播放接口。对于付费、充电专属或其他需要登录权限的直播，
 解析器会在新版接口无流时读取登录直播页的预载数据，并支持 `HLS/fMP4`；登录 Cookie
@@ -319,17 +320,33 @@ python3 scripts/import_bilibili_cookie.py --from-edge \
 Cookie 到期后需要重新导入，并重启 Watchlist 服务使新进程重新加载凭据。
 
 如果登录页只提供 DRM 流，系统不会尝试破解 DRM。可以把已获授权播放器的系统音频
-输出到虚拟设备，再由 AVFoundation 回采。以下配置会在 Session 开始时把系统输出
-切到 BlackHole，确认当前输出精确为 `BlackHole 2ch` 后才将系统输出音量设为
-100% 并取消静音。Session 结束、失败或受控停止后继续保持 BlackHole 及
-当前音量，不自动恢复 Mac mini 扬声器或原音量。该 fail-safe 策略避免无人值守时
-突然外放；但其他应用和
-系统通知的声音也可能进入录音。需要扬声器时，必须由用户手动切回：
+输出到虚拟设备，再由 AVFoundation 回采。`BILIBILI_DRM_AUDIO_DEVICE` 只定义
+录音输入；`bilibili_capture.playback_output_device` 独立定义系统播放输出。
+留空播放输出时，系统保持纯 BlackHole 静音采集模式：确认当前输出精确为
+`BlackHole 2ch` 后才将系统输出音量设为 100% 并取消静音。
 
 ```bash
 brew install switchaudio-osx
 printf '%s\n' 'BILIBILI_DRM_AUDIO_DEVICE=BlackHole 2ch' >> .live-sentinel.env
 ```
+
+需要本机监听时，可在 macOS“音频 MIDI 设置”中创建同时包含
+`Mac mini扬声器` 和 `BlackHole 2ch` 的多输出设备，例如 `LiveSentinel Monitor`，
+再配置：
+
+```json
+{
+  "bilibili_capture": {
+    "playback_output_device": "LiveSentinel Monitor"
+  }
+}
+```
+
+此时 FFmpeg 仍只从 BlackHole 录音，系统播放则同时送到 BlackHole 和物理扬声器。
+程序不会对多输出设备调用系统总音量；应在“音频 MIDI 设置”中将
+BlackHole 保持 100%，并将 Mac mini 扬声器设为舒适的低音量。Session 结束、
+失败或受控停止后保持当前播放设备及音量，不自动恢复。两种模式都可能
+把其他应用和系统通知的声音录入归档。
 
 对于同一场直播会从公开流切换为充电/DRM 流的房间，应从开场就固定使用
 已登录浏览器 + BlackHole，避免中途更换采集传输。房间级配置示例：

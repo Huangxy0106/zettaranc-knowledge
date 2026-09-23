@@ -12,6 +12,8 @@ bilibili_capture:
   # 指定房间从开场起始终使用已登录浏览器 + BlackHole，
   # 避免公开流切换为充电/DRM 流时中断录音。
   browser_audio_room_ids: []
+  # 可设为包含 BlackHole 和扬声器的 macOS 多输出设备；留空则保持纯 BlackHole。
+  playback_output_device: ""
   status_poll_interval_sec: 30
   offline_confirmations: 3
   offline_confirmation_interval_sec: 5

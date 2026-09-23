@@ -23,6 +23,7 @@ class LaunchdPlistTests(unittest.TestCase):
             self.assertEqual(payload["EnvironmentVariables"]["PATH"], DEFAULT_SERVICE_PATH)
             self.assertIn("/opt/homebrew/bin", DEFAULT_SERVICE_PATH.split(":"))
             self.assertIn("/usr/bin", DEFAULT_SERVICE_PATH.split(":"))
+            self.assertEqual(payload["ProcessType"], "Interactive")
             self.assertTrue(payload["StandardErrorPath"].endswith("watchlist.launchd.err.log"))
 
 

@@ -121,6 +121,15 @@ def _browser_audio_url_from_env() -> str | None:
     return raw
 
 
+def _playback_output_device(capture_device: str, configured_device: str) -> str:
+    """Resolve a system playback route independently from the capture input."""
+
+    device = configured_device.strip() or capture_device
+    if not device or "\r" in device or "\n" in device:
+        raise RuntimeError("bilibili_capture.playback_output_device 格式无效")
+    return device
+
+
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.environ.get(name)
     if raw is None or not raw.strip():
@@ -368,7 +377,11 @@ def run_bilibili_session(
                     "BILIBILI_DRM_REQUIRED_SOUND_MS", 500
                 ),
             )
-            audio_route = MacOSAudioOutputRoute(audio_device)
+            playback_output_device = _playback_output_device(
+                audio_device,
+                config.bilibili_capture.playback_output_device,
+            )
+            audio_route = MacOSAudioOutputRoute(playback_output_device)
             open_browser = _env_bool("BILIBILI_DRM_OPEN_BROWSER", True)
             if forced_browser_capture and not open_browser:
                 raise RuntimeError(
@@ -408,8 +421,9 @@ def run_bilibili_session(
 
         audio_source = StartHookAudioSource(audio_source, start_browser_playback)
     if audio_route is not None:
-        # Route to BlackHole inside the Session lifecycle so even a routing
-        # failure is persisted as a pre-first-frame recording failure.
+        # Route system playback inside the Session lifecycle so even a routing
+        # failure is persisted as a pre-first-frame recording failure. Capture
+        # can remain on BlackHole while playback uses a Multi-Output Device.
         audio_source = PreStartHookAudioSource(audio_source, audio_route.activate)
     if max_duration_sec is not None:
         audio_source = DurationLimitedAudioSource(
